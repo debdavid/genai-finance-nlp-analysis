@@ -120,6 +120,7 @@ stack-data==0.6.3
 streamlit==1.49.1
 tenacity==9.1.2
 terminado==0.18.1
+textblob==0.19.0
 threadpoolctl==3.6.0
 tinycss2==1.4.0
 toml==0.10.2
