@@ -7,6 +7,19 @@ from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import matplotlib.pyplot as plt
+import nltk
+from wordcloud import WordCloud
+from textblob import TextBlob
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Download NLTK data
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')  # Ensure stopwords available
+    nltk.download('punkt')      # Needed for tokenization
+stop_words = set(stopwords.words('english'))
 
 # Set NLTK data path
 nltk_data_dir = '/workspaces/genai-finance-nlp-analysis/nltk_data'  # Why: Use same NLTK data path as notebook
