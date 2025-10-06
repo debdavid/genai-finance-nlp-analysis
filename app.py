@@ -1,95 +1,139 @@
 import streamlit as st
 import pandas as pd
-import PyPDF2
-import re
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from nltk.stem import WordNetLemmatizer
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import matplotlib.pyplot as plt
-import nltk
-from wordcloud import WordCloud
-from textblob import TextBlob
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-# Download NLTK data
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')  # Ensure stopwords available
-    nltk.download('punkt')      # Needed for tokenization
-stop_words = set(stopwords.words('english'))
-
-# Set NLTK data path
-nltk_data_dir = '/workspaces/genai-finance-nlp-analysis/nltk_data'  # Why: Use same NLTK data path as notebook
+from wordcloud import WordCloud
+import pdfplumber
+import os
 import nltk
-nltk.data.path.append(nltk_data_dir)  # Why: Ensure NLTK finds punkt, stopwords, wordnet
+from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.corpus import stopwords
+from nltk.probability import FreqDist
+from heapq import nlargest
 
-def extract_text_from_pdf(pdf_file):
-    """Extract text from PDF."""
-    text = ''
+nltk.download('punkt')
+nltk.download('stopwords')
+
+# Directories
+PROCESSED_DIR = 'data/processed'
+ANALYSIS_PATH = os.path.join(PROCESSED_DIR, 'analysis_results.csv')
+
+# Load data with error handling
+@st.cache_data
+def load_data():
     try:
-        reader = PyPDF2.PdfReader(pdf_file)  # Why: Read PDF file
-        if reader.is_encrypted:
-            reader.decrypt('')  # Why: Handle encrypted PDFs (e.g., KPMG)
-        for page in reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + '\n'
-        return text
-    except Exception as e:
-        st.error(f"Error reading PDF: {e}")  # Why: Show error in app
-        return ''
+        df = pd.read_csv(ANALYSIS_PATH)
+        required_columns = ["report", "firm", "year", "industry", "vader_sentiment", "textblob_sentiment", "text", "top_keywords", "topics"]
+        missing_cols = [col for col in required_columns if col not in df.columns]
+        if missing_cols:
+            st.error(f"Missing columns in analysis_results.csv: {missing_cols}")
+            return pd.DataFrame()
+        # Handle NaN values
+        df = df.fillna({"firm": "Unknown", "year": 0, "industry": "Unknown", "topics": "", "top_keywords": "", "text": ""})
+        return df
+    except FileNotFoundError:
+        st.error("analysis_results.csv not found. Please run analyze_texts.py.")
+        return pd.DataFrame()
 
-lemmatizer = WordNetLemmatizer()
-stop_words = set(stopwords.words('english'))
+df = load_data()
+if df.empty:
+    st.warning("No data available. Please check data/processed/analysis_results.csv.")
+    st.stop()
 
-def clean_text(text):
-    """Clean text for NLP."""
-    try:
-        text = re.sub(r'[^a-zA-Z\s]', '', text.lower())  # Why: Remove non-letters
-        tokens = word_tokenize(text)  # Why: Tokenize with NLTK
-    except LookupError:
-        tokens = text.split()  # Why: Fallback if punkt fails
-    cleaned = [lemmatizer.lemmatize(token) for token in tokens if token not in stop_words and len(token) > 3]  # Why: Lemmatize, filter stops
-    return ' '.join(cleaned)
+# Sidebar Filters
+st.sidebar.header("Filters")
+firm_options = sorted(df["firm"].unique())
+year_options = sorted(df["year"].astype(str).unique())
+industry_options = sorted(df["industry"].unique())
+firm = st.sidebar.multiselect("Firm", options=firm_options, default=firm_options)
+year = st.sidebar.multiselect("Year", options=year_options, default=year_options)
+industry = st.sidebar.multiselect("Industry", options=industry_options, default=industry_options)
 
-st.title("🧠 ConsultAI Insights: AI in FS")  # Why: App title
-st.write("Upload a report to compare sentiment.")  # Why: User instructions
+# Filter data
+filtered_df = df[df["firm"].isin(firm) & df["year"].astype(str).isin(year) & df["industry"].isin(industry)]
+if filtered_df.empty:
+    st.warning("No data matches the selected filters. Please adjust filters.")
+    st.stop()
 
-# Load benchmark data
-df = pd.read_csv('data/cleaned_texts.csv')  # Why: Load preprocessed data with sentiments
+# Report Selection for Summary
+st.subheader("Select Report for Summary")
+report_options = sorted(filtered_df["report"].unique())
+selected_report = st.selectbox("Choose a report", report_options)
+if selected_report:
+    report_df = filtered_df[filtered_df["report"] == selected_report]
+    full_text = " ".join(report_df["text"])
+    sentences = sent_tokenize(full_text)
+    if sentences:
+        # Select top 3 sentences for brevity
+        freq = FreqDist(word.lower() for sentence in sentences for word in word_tokenize(sentence) if word.lower() not in stopwords.words('english'))
+        summary_sentences = nlargest(3, sentences, key=lambda s: sum(freq.get(w, 0) for w in word_tokenize(s.lower())))
+        summary = "\n- ".join(summary_sentences)
+        st.write("**Summary of selected report:**")
+        st.write(f"- {summary}")
+    else:
+        st.write("No text available for summary.")
 
-# Sidebar: Show benchmark sentiments
-st.sidebar.header("Benchmark Reports")  # Why: Organize benchmark info
-selected_firm = st.sidebar.selectbox("View Firm", df['Firm_Report'].tolist())  # Why: Let user select report
-st.sidebar.write(f"Sentiment: {df[df['Firm_Report']==selected_firm]['Sentiment'].iloc[0]:.2f}")  # Why: Show sentiment
+# Sentiment Plot (by report, averaged across chunks)
+st.subheader("Average Sentiment by Report")
+sentiment_df = filtered_df.groupby("report").agg({
+    "vader_sentiment": "mean",
+    "firm": "first"
+}).reset_index()
+if not sentiment_df.empty:
+    fig, ax = plt.subplots(figsize=(10, max(4, len(sentiment_df)*0.3)))
+    sns.barplot(data=sentiment_df, x="vader_sentiment", y="report", hue="firm", ax=ax, palette="tab10")
+    ax.set_xlabel("VADER Sentiment Score")
+    ax.set_ylabel("Report")
+    ax.legend(title="Firm", loc="best")
+    st.pyplot(fig)
+else:
+    st.warning("No sentiment data available for the selected filters.")
 
-# Upload new PDF
-uploaded_file = st.file_uploader("Upload PDF", type='pdf')  # Why: Allow PDF upload
+# Topic Distribution Bar Chart
+st.subheader("Topic Distribution")
+topics = filtered_df["topics"].str.split("|").explode().value_counts()
+if not topics.empty:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.barplot(x=topics.values, y=topics.index, ax=ax, palette="viridis")
+    ax.set_xlabel("Chunk Count")
+    ax.set_ylabel("Topics")
+    ax.set_title("Distribution of Topics Across Filtered Reports")
+    st.pyplot(fig)
+else:
+    st.warning("No topics available for the selected filters.")
+
+# Keyword Word Cloud (unique per report)
+st.subheader("Top Keywords Word Cloud")
+# Aggregate keywords per report
+generic_terms = {'report', 'use', 'ai', 'university', 'melbourne', 'kpmg', 'rights', 'international', 'entities', 'copyright'}
+keywords_per_report = filtered_df.groupby('report')['top_keywords'].apply(lambda x: set('|'.join(x).split('|')) - generic_terms)
+keywords_freq = {}
+for report, keywords in keywords_per_report.items():
+    for kw in keywords:
+        if kw.strip():
+            keywords_freq[kw] = keywords_freq.get(kw, 0) + 1
+if keywords_freq:
+    wordcloud = WordCloud(width=800, height=400, background_color="white").generate_from_frequencies(keywords_freq)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.imshow(wordcloud, interpolation="bilinear")
+    ax.axis("off")
+    st.pyplot(fig)
+else:
+    st.warning("No keywords available for the selected filters.")
+
+# Top 10 Keywords Table
+st.subheader("Top 10 Keywords")
+if keywords_freq:
+    keywords_df = pd.DataFrame(list(keywords_freq.items()), columns=['Keyword', 'Frequency']).sort_values(by='Frequency', ascending=False).head(10)
+    st.table(keywords_df)
+else:
+    st.warning("No keywords available for the selected filters.")
+
+# PDF Upload
+st.subheader("Upload New PDF")
+uploaded_file = st.file_uploader("Choose a PDF", type="pdf")
 if uploaded_file:
-    raw_text = extract_text_from_pdf(uploaded_file)  # Why: Extract text from uploaded PDF
-    cleaned = clean_text(raw_text)  # Why: Clean text for analysis
-    analyzer = SentimentIntensityAnalyzer()
-    sent = analyzer.polarity_scores(cleaned)['compound']  # Why: Calculate sentiment
-    st.subheader("New Report")
-    st.write(f"Sentiment: {sent:.2f} (Positive >0.05, Negative <0)")  # Why: Display result
-
-    # Plot comparison
-    st.subheader("Sentiment Comparison")  # Why: Section for visualization
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sentiments = list(df['Sentiment']) + [sent]  # Why: Combine benchmark and new sentiment
-    ax.bar(range(len(sentiments)), sentiments)  # Why: Plot bar chart
-    ax.set_xticks(range(len(sentiments)), list(df['Firm_Report']) + ['New'])  # Why: Label x-axis
-    ax.set_title('Sentiment Comparison')
-    ax.set_ylabel('VADER Sentiment Score')
-    st.pyplot(fig)  # Why: Display in app
-
-# Benchmark visualization
-st.subheader("Benchmark Insights")  # Why: Section for benchmark plot
-fig_bench, ax_bench = plt.subplots(figsize=(8, 5))
-df.groupby('Firm_Report')['Sentiment'].mean().plot(kind='bar', ax=ax_bench)  # Why: Plot benchmark sentiments
-ax_bench.set_title('Sentiment Across Firms')
-ax_bench.set_ylabel('VADER Sentiment Score')
-st.pyplot(fig_bench)  # Why: Display in app
+    with pdfplumber.open(uploaded_file) as pdf:
+        text = "".join(page.extract_text() or "" for page in pdf.pages)
+    st.write("**Extracted text (preview):**")
+    st.write(text[:500] + "...")
