@@ -21,17 +21,17 @@ ANALYSIS_PATH = os.path.join(PROCESSED_DIR, 'analysis_results.csv')
 
 # Text cleaning function
 def clean_text(text):
-    # Remove boilerplate (e.g., copyright, document classification)
+    # Remove boilerplate
     boilerplate_patterns = [
         r'22002244 KKPPMMGG LLLLPP.*?\. AAllll rriigghhttss rreesseerrvveedd\.',
         r'Document Classification KPMG Public',
         r'The KPMG name and logo are trademarks.*?\.',
-        r'\b[A-Z]{2,}\b \b[A-Z]{2,}\b',  # Remove repeated uppercase words (e.g., KKPPMMGG LLLLPP)
-        r'\b\d{6,}\b',  # Remove large numbers (e.g., 22002244)
+        r'\b[A-Z]{2,}\b \b[A-Z]{2,}\b',
+        r'\b\d{6,}\b',
     ]
     for pattern in boilerplate_patterns:
         text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL)
-    # Fix repeated characters (e.g., KKPPMMGG → KPMG)
+    # Fix repeated characters
     text = re.sub(r'([A-Z])\1+', r'\1', text)
     # Remove extra spaces and newlines
     text = re.sub(r'\s+', ' ', text).strip()
