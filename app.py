@@ -6,6 +6,7 @@ from wordcloud import WordCloud
 import pdfplumber
 import os
 import nltk
+import re
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 from nltk.probability import FreqDist
@@ -17,6 +18,24 @@ nltk.download('stopwords')
 # Directories
 PROCESSED_DIR = 'data/processed'
 ANALYSIS_PATH = os.path.join(PROCESSED_DIR, 'analysis_results.csv')
+
+# Text cleaning function
+def clean_text(text):
+    # Remove boilerplate (e.g., copyright, document classification)
+    boilerplate_patterns = [
+        r'22002244 KKPPMMGG LLLLPP.*?\. AAllll rriigghhttss rreesseerrvveedd\.',
+        r'Document Classification KPMG Public',
+        r'The KPMG name and logo are trademarks.*?\.',
+        r'\b[A-Z]{2,}\b \b[A-Z]{2,}\b',  # Remove repeated uppercase words (e.g., KKPPMMGG LLLLPP)
+        r'\b\d{6,}\b',  # Remove large numbers (e.g., 22002244)
+    ]
+    for pattern in boilerplate_patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL)
+    # Fix repeated characters (e.g., KKPPMMGG → KPMG)
+    text = re.sub(r'([A-Z])\1+', r'\1', text)
+    # Remove extra spaces and newlines
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 # Load data with error handling
 @st.cache_data
@@ -62,14 +81,18 @@ selected_report = st.selectbox("Choose a report", report_options)
 if selected_report:
     report_df = filtered_df[filtered_df["report"] == selected_report]
     full_text = " ".join(report_df["text"])
+    # Clean text
+    full_text = clean_text(full_text)
     sentences = sent_tokenize(full_text)
     if sentences:
-        # Select top 3 sentences for brevity
-        freq = FreqDist(word.lower() for sentence in sentences for word in word_tokenize(sentence) if word.lower() not in stopwords.words('english'))
-        summary_sentences = nlargest(3, sentences, key=lambda s: sum(freq.get(w, 0) for w in word_tokenize(s.lower())))
+        # Use top_keywords for scoring
+        keywords = set("|".join(report_df["top_keywords"]).split("|"))
+        keywords = {kw.lower() for kw in keywords if kw.strip() and kw.lower() not in stopwords.words('english')}
+        # Score sentences based on keyword presence
+        summary_sentences = nlargest(2, sentences, key=lambda s: sum(1 for w in word_tokenize(s.lower()) if w in keywords))
         summary = "\n- ".join(summary_sentences)
         st.write("**Summary of selected report:**")
-        st.write(f"- {summary}")
+        st.write(f"- {summary}" if summary else "- No meaningful sentences found.")
     else:
         st.write("No text available for summary.")
 
@@ -104,7 +127,6 @@ else:
 
 # Keyword Word Cloud (unique per report)
 st.subheader("Top Keywords Word Cloud")
-# Aggregate keywords per report
 generic_terms = {'report', 'use', 'ai', 'university', 'melbourne', 'kpmg', 'rights', 'international', 'entities', 'copyright'}
 keywords_per_report = filtered_df.groupby('report')['top_keywords'].apply(lambda x: set('|'.join(x).split('|')) - generic_terms)
 keywords_freq = {}
