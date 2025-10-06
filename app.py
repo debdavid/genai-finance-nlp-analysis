@@ -11,6 +11,7 @@ from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 from nltk.probability import FreqDist
 from heapq import nlargest
+from transformers import pipeline
 
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -36,6 +37,13 @@ def clean_text(text):
     # Remove extra spaces and newlines
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+# Load summarizer model (abstractive)
+@st.cache_resource
+def load_summarizer():
+    return pipeline("summarization", model="t5-small")
+
+summarizer = load_summarizer()
 
 # Load data with error handling
 @st.cache_data
@@ -83,16 +91,11 @@ if selected_report:
     full_text = " ".join(report_df["text"])
     # Clean text
     full_text = clean_text(full_text)
-    sentences = sent_tokenize(full_text)
-    if sentences:
-        # Use top_keywords for scoring
-        keywords = set("|".join(report_df["top_keywords"]).split("|"))
-        keywords = {kw.lower() for kw in keywords if kw.strip() and kw.lower() not in stopwords.words('english')}
-        # Score sentences based on keyword presence
-        summary_sentences = nlargest(2, sentences, key=lambda s: sum(1 for w in word_tokenize(s.lower()) if w in keywords))
-        summary = "\n- ".join(summary_sentences)
+    if full_text:
+        # Abstractive summary
+        summary = summarizer(full_text, max_length=100, min_length=30, do_sample=False)[0]['summary_text']
         st.write("**Summary of selected report:**")
-        st.write(f"- {summary}" if summary else "- No meaningful sentences found.")
+        st.write(summary)
     else:
         st.write("No text available for summary.")
 
@@ -127,6 +130,7 @@ else:
 
 # Keyword Word Cloud (unique per report)
 st.subheader("Top Keywords Word Cloud")
+# Aggregate keywords per report
 generic_terms = {'report', 'use', 'ai', 'university', 'melbourne', 'kpmg', 'rights', 'international', 'entities', 'copyright'}
 keywords_per_report = filtered_df.groupby('report')['top_keywords'].apply(lambda x: set('|'.join(x).split('|')) - generic_terms)
 keywords_freq = {}
